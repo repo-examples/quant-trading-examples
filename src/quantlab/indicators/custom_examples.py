@@ -231,10 +231,13 @@ def reconstruct_phase_space_3d(
 
     x0 = arr.copy()
     x1 = np.empty(n, dtype=np.float64)
+    x1[:tau] = arr[0]
+    x1[tau:] = arr[:-tau]
+
     x2 = np.empty(n, dtype=np.float64)
-    for t in range(n):
-        x1[t] = arr[t - tau] if t >= tau else arr[0]
-        x2[t] = arr[t - 2 * tau] if t >= 2 * tau else arr[0]
+    two_tau = 2 * tau
+    x2[:two_tau] = arr[0]
+    x2[two_tau:] = arr[:-two_tau]
     return x0, x1, x2
 
 

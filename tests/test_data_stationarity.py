@@ -93,3 +93,17 @@ def test_adf_and_find_min_ffd_d_stationarity() -> None:
     assert res.p_value < 0.05
     assert 0.0 < res.d_optimal <= 1.0
     assert res.memory_correlation > 0.30
+
+
+def test_short_series_validation_errors() -> None:
+    with pytest.raises(ValueError, match="Minimum bars required is 32"):
+        generate_synthetic_ohlcv(bars=16)
+
+    with pytest.raises(ValueError, match="length >= 8"):
+        frac_diff_ffd(np.ones(4), d=0.5)
+
+    with pytest.raises(ValueError, match="at least 16"):
+        adf_test(np.ones(10))
+
+    with pytest.raises(ValueError, match="length >= 32"):
+        find_min_ffd_d(np.ones(20))

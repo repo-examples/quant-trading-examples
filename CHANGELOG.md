@@ -16,9 +16,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `baselines.py`: Vectorized `@numba.njit` kernels and symbolic ASTs for `RSI`, `EMA`, `ATR`, `MACD`, and `KAMA`.
   - `custom_examples.py`: Physics-inspired `@numba.njit` kernels and symbolic/recurrence ASTs for `KalmanFilter` (1D kinematic velocity filter), `PhaseSpaceEnergy` (Takens 3D delay-embedding Hamiltonian energy flux), and `EntropyFlow` (rolling Shannon information coherence order flow).
 - **Information-Theoretic, Statistical & DSP Proof Suite (`quantlab.proofs`)**:
-  - `entropy.py`: Miller-Madow Shannon entropy, Bandt-Pompe permutation entropy, Kraskov-Stögbauer-Grassberger (KSG) k-NN Mutual Information, Symbolic & k-NN Transfer Entropy, and Monte Carlo IAAFT / Block-Shuffle surrogate significance gates.
-  - `stats_gate.py`: Multi-horizon Spearman Rank IC decay, 1-Wasserstein bull/bear regime separation distance, Variance Inflation Factor (VIF) orthogonality gate, and unified `run_proof_suite` / `evaluate_multiple_indicators`.
-  - `dsp.py`: Analytic signal Hilbert Transform phase-lag diagnostics, Welch cross-spectral Bode magnitude/phase response, 3rd-derivative Jerk smoothness energy, and 2D `(Phase Lag, Jerk)` Pareto frontier detection.
+  - `entropy.py`: Miller-Madow Shannon entropy, Bandt-Pompe permutation entropy, vectorized `cKDTree` Kraskov-Stögbauer-Grassberger (KSG) k-NN Mutual Information, Symbolic & k-NN Transfer Entropy, and Monte Carlo IAAFT / Block-Shuffle surrogate significance gates.
+  - `stats_gate.py`: Multi-horizon Spearman Rank IC decay, 1-Wasserstein bull/bear regime separation distance, regularized Variance Inflation Factor (VIF) orthogonality gate, and unified `run_proof_suite` / `evaluate_multiple_indicators`.
+  - `dsp.py`: `@numba.njit` causal EMA detrending, Analytic signal Hilbert Transform phase-lag diagnostics, Welch cross-spectral Bode magnitude/phase response, 3rd-derivative Jerk smoothness energy, and 2D `(Phase Lag, Jerk)` Pareto frontier detection.
 - **SymPy-to-Pine Script v6 Transpiler (`quantlab.transpiler.pine_v6`)**:
   - Recursive AST compiler (`PineV6Transpiler`, `transpile_to_pine_v6`) generating `//@version=6` TradingView scripts and self-contained Markdown Research Cards (`generate_research_card`).
 - **CLI & 4-Quadrant Diagnostic Dashboard (`quantlab.cli`, `quantlab.dashboard.app`)**:

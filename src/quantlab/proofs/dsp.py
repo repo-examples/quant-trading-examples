@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+import numba
 import numpy as np
 from scipy import signal
 
@@ -38,18 +39,26 @@ def compute_jerk_energy(series: np.ndarray) -> float:
     return float(np.mean(d3 * d3))
 
 
+@numba.njit(cache=True)
+def _causal_ema_detrend_kernel(x: np.ndarray, alpha: float) -> np.ndarray:
+    n = len(x)
+    detrended = np.empty(n, dtype=np.float64)
+    ema = x[0]
+    detrended[0] = 0.0
+    for t in range(1, n):
+        ema = alpha * x[t] + (1.0 - alpha) * ema
+        detrended[t] = x[t] - ema
+    return detrended
+
+
 def _causal_detrend(series: np.ndarray, period: int = 20) -> np.ndarray:
     """Remove low-frequency drift causally so Hilbert phase measures oscillatory cycle."""
-    x = np.asarray(series, dtype=np.float64)
+    x = np.ascontiguousarray(series, dtype=np.float64)
     n = len(x)
     if n < 4:
         return np.zeros_like(x)
     alpha = 2.0 / (float(max(2, period)) + 1.0)
-    ema = np.empty(n, dtype=np.float64)
-    ema[0] = x[0]
-    for t in range(1, n):
-        ema[t] = alpha * x[t] + (1.0 - alpha) * ema[t - 1]
-    detrended = x - ema
+    detrended = _causal_ema_detrend_kernel(x, alpha)
     std = float(np.std(detrended))
     if std > 1e-14:
         detrended = detrended / std

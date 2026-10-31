@@ -172,8 +172,8 @@ def mutual_information_ksg(x: np.ndarray, y: np.ndarray, k: int = 5) -> float:
     dists, _ = tree_xy.query(joint, k=k + 1, p=np.inf)
     radii = np.maximum(dists[:, k] - 1e-13, 1e-14)
 
-    nx = np.array([len(tree_x.query_ball_point([xz[i]], r=radii[i], p=np.inf)) - 1 for i in range(n)], dtype=np.float64)
-    ny = np.array([len(tree_y.query_ball_point([yz[i]], r=radii[i], p=np.inf)) - 1 for i in range(n)], dtype=np.float64)
+    nx = tree_x.query_ball_point(xz[:, None], r=radii, p=np.inf, return_length=True).astype(np.float64) - 1.0
+    ny = tree_y.query_ball_point(yz[:, None], r=radii, p=np.inf, return_length=True).astype(np.float64) - 1.0
 
     mi = float(digamma(k) + digamma(n) - np.mean(digamma(nx + 1.0) + digamma(ny + 1.0)))
     return max(0.0, mi)
@@ -315,18 +315,9 @@ def knn_transfer_entropy(
     dists, _ = tree_yyx.query(joint_yyx, k=k + 1, p=np.inf)
     radii = np.maximum(dists[:, k] - 1e-13, 1e-14)
 
-    n_yy = np.array(
-        [len(tree_yy.query_ball_point(joint_yy[i], r=radii[i], p=np.inf)) - 1 for i in range(n)],
-        dtype=np.float64,
-    )
-    n_yx = np.array(
-        [len(tree_yx.query_ball_point(joint_yx[i], r=radii[i], p=np.inf)) - 1 for i in range(n)],
-        dtype=np.float64,
-    )
-    n_y = np.array(
-        [len(tree_y.query_ball_point(marg_y[i], r=radii[i], p=np.inf)) - 1 for i in range(n)],
-        dtype=np.float64,
-    )
+    n_yy = tree_yy.query_ball_point(joint_yy, r=radii, p=np.inf, return_length=True).astype(np.float64) - 1.0
+    n_yx = tree_yx.query_ball_point(joint_yx, r=radii, p=np.inf, return_length=True).astype(np.float64) - 1.0
+    n_y = tree_y.query_ball_point(marg_y, r=radii, p=np.inf, return_length=True).astype(np.float64) - 1.0
 
     cmi = float(digamma(k) + np.mean(digamma(n_y + 1.0) - digamma(n_yy + 1.0) - digamma(n_yx + 1.0)))
     return max(0.0, cmi)

@@ -672,5 +672,10 @@ def render_streamlit_app() -> None:
             st.error(f"Symbolic AST Transpilation Error: {exc}")
 
 
+# Canonical aliases matching Spec-Kit Task T017 contract names
+build_dashboard_state = build_dashboard_bundle
+render_dashboard = render_streamlit_app
+
+
 if __name__ == "__main__":
     render_streamlit_app()

@@ -13,7 +13,11 @@ from quantlab.proofs.entropy import (
     permutation_entropy,
     shannon_entropy,
 )
-from quantlab.proofs.stats_gate import evaluate_multiple_indicators, run_proof_suite
+from quantlab.proofs.stats_gate import (
+    compute_vif_and_correlations,
+    evaluate_multiple_indicators,
+    run_proof_suite,
+)
 
 
 def test_entropy_and_causal_transfer_entropy_ground_truth() -> None:
@@ -94,3 +98,20 @@ def test_run_proof_suite_and_multi_indicator_evaluation() -> None:
     multi = evaluate_multiple_indicators(subset, ds, n_surrogates=20, seed=42)
     assert len(multi) == 4
     assert any(r.dsp.pareto_optimal for r in multi)
+
+
+def test_collinear_vif_capped_without_linalg_error() -> None:
+    ds = fetch_ohlcv(symbol="SYNTH:COUPLED_OU", provider="synthetic", bars=300, seed=42, use_cache=False)
+    reg = get_registry()
+    rsi_series = reg.get("RSI").evaluate(ds.df)
+    # Pass a perfectly collinear clone under a non-baseline name
+    vif, corrs = compute_vif_and_correlations(
+        indicator_name="CollinearRSIClone",
+        indicator_series=2.5 * rsi_series + 10.0,
+        dataset=ds,
+        is_overlay=False,
+    )
+    assert np.isfinite(vif)
+    assert vif <= 1000.0 + 1e-6
+    assert vif > 100.0
+    assert abs(corrs["RSI"] - 1.0) < 1e-6
