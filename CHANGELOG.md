@@ -8,6 +8,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Claude Code Review & CI Workflows (`.github/workflows/`)**:
+  - `ci.yml`: Automated `CI` workflow running `ruff check src tests`, `pytest -v`, and `quantlab dashboard --check` on Python 3.11.
+  - `claude.yml`: Interactive `@claude` GitHub App workflow powered by Claude Opus 5.5 High (`anthropics/claude-code-action@v1`).
+  - `pr-review.yml` & `prompts/pr-review.md`: Automated Pull Request review, in-place auto-fix (`[skip pr-review]`), zero-token `merge_only` fast path, self-healing label governance, exact-SHA `CI` gating, squash-merge, and parent-story closure tailored to `quantlab`.
+  - `tests/test_claude_workflows.py`: Static contract tests validating the Claude Code Review and CI workflows.
 - **Point-in-Time Market Data & Fractional Stationarity (`quantlab.data`)**:
   - `loader.py`: `OHLCVDataset` with strict PIT invariant verification, local `.cache/parquet/` caching, `yfinance` and `ccxt` fetchers, and deterministic `synthetic` stochastic generators (`SYNTH:COUPLED_OU` coupled Ornstein-Uhlenbeck + Heston regime-switching process and `SYNTH:WHITE_NOISE` null control).
   - `stationarity.py`: `@numba.njit` Fixed-Width Window Fractional Differentiation (`frac_diff_ffd`), Augmented Dickey-Fuller (`adf_test`) with MacKinnon response-surface $p$-values, and automated minimum stationary order $d^*$ search (`find_min_ffd_d`).
