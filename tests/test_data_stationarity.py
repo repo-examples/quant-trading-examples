@@ -5,9 +5,16 @@ from __future__ import annotations
 from pathlib import Path
 
 import numpy as np
+import pandas as pd
 import pytest
 
-from quantlab.data.loader import OHLCVDataset, fetch_ohlcv, generate_synthetic_ohlcv
+from quantlab.data.loader import (
+    OHLCVDataset,
+    _resample_ohlcv_4h,
+    extract_unix_timestamps,
+    fetch_ohlcv,
+    generate_synthetic_ohlcv,
+)
 from quantlab.data.stationarity import adf_test, compute_ffd_weights, find_min_ffd_d, frac_diff_ffd
 
 
@@ -107,3 +114,50 @@ def test_short_series_validation_errors() -> None:
 
     with pytest.raises(ValueError, match="length >= 32"):
         find_min_ffd_d(np.ones(20))
+
+
+def test_extract_unix_timestamps_across_resolutions_and_timezones() -> None:
+    base_idx = pd.date_range("2025-01-01", periods=60, freq="1D", tz="UTC")
+    expected = base_idx.as_unit("s").astype("int64").to_numpy()
+
+    for unit in ("s", "ms", "us", "ns"):
+        idx_unit = base_idx.as_unit(unit)
+        ts = extract_unix_timestamps(idx_unit)
+        np.testing.assert_array_equal(ts, expected)
+        assert np.all(np.diff(ts) > 0)
+
+    # Timezone-naive index should also normalize cleanly to UTC seconds
+    naive_idx = pd.date_range("2025-01-01", periods=60, freq="1D")
+    ts_naive = extract_unix_timestamps(naive_idx)
+    np.testing.assert_array_equal(ts_naive, expected)
+
+    # Dataset unix_timestamps property on millisecond-resolution index (yfinance/ccxt format)
+    df = generate_synthetic_ohlcv(bars=64, seed=42)
+    df.index = df.index.as_unit("ms")
+    ds = OHLCVDataset(symbol="SPY", provider="yfinance", timeframe="1d", df=df)
+    assert len(ds.unix_timestamps) == 64
+    assert len(set(ds.unix_timestamps.tolist())) == 64
+    assert np.all(np.diff(ds.unix_timestamps) == 86400)
+    assert int(ds.unix_timestamps[0]) > 1_700_000_000
+
+
+def test_resample_ohlcv_4h_and_cross_provider_symbol_sanitization(tmp_path: Path) -> None:
+    df_1h = generate_synthetic_ohlcv(timeframe="1h", bars=120, seed=11)
+    df_4h = _resample_ohlcv_4h(df_1h)
+    assert len(df_4h) == 31
+    ds_4h = OHLCVDataset(symbol="SPY", provider="yfinance", timeframe="4h", df=df_4h)
+    assert ds_4h.n_bars == 31
+    assert np.all(np.diff(ds_4h.unix_timestamps) == 4 * 3600)
+
+    # Passing a stale SYNTH: symbol with provider="yfinance" sanitizes symbol to "SPY"
+    ds_yf = fetch_ohlcv(
+        symbol="SYNTH:COUPLED_OU",
+        provider="yfinance",
+        timeframe="1d",
+        bars=64,
+        seed=42,
+        cache_dir=tmp_path,
+        fallback_to_synthetic=True,
+    )
+    assert ds_yf.symbol == "SPY"
+    assert len(set(ds_yf.unix_timestamps.tolist())) == 64

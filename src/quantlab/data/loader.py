@@ -65,6 +65,11 @@ class OHLCVDataset:
         return int(len(self.df))
 
     @property
+    def unix_timestamps(self) -> np.ndarray:
+        """Return strictly increasing UTC Unix epoch seconds (int64) across any DatetimeIndex resolution."""
+        return extract_unix_timestamps(self.df.index)
+
+    @property
     def log_close(self) -> np.ndarray:
         return np.log(np.maximum(self.df["close"].to_numpy(dtype=np.float64), 1e-12))
 
@@ -89,6 +94,20 @@ class OHLCVDataset:
         if n > horizon:
             out[:-horizon] = lc[horizon:] - lc[:-horizon]
         return out
+
+
+def extract_unix_timestamps(index: pd.DatetimeIndex) -> np.ndarray:
+    """Convert any pandas DatetimeIndex (s, ms, us, ns, tz-naive or tz-aware) to strictly increasing UTC Unix epoch seconds (int64)."""
+    if not isinstance(index, pd.DatetimeIndex):
+        raise ValueError("extract_unix_timestamps requires a pandas DatetimeIndex.")
+    if len(index) == 0:
+        return np.empty(0, dtype=np.int64)
+    idx_utc = index.tz_localize("UTC") if index.tz is None else index.tz_convert("UTC")
+    ts = idx_utc.as_unit("s").astype("int64").to_numpy(dtype=np.int64, copy=True)
+    for i in range(1, len(ts)):
+        if ts[i] <= ts[i - 1]:
+            ts[i] = ts[i - 1] + 1
+    return ts
 
 
 def _sanitize_cache_key(symbol: str, provider: str, timeframe: str, bars: int, seed: int) -> str:
@@ -196,12 +215,35 @@ def generate_synthetic_ohlcv(
     return df
 
 
+def _resample_ohlcv_4h(df: pd.DataFrame) -> pd.DataFrame:
+    """Causally aggregate intraday OHLCV bars into 4-hour Point-in-Time bars."""
+    resampled = (
+        df.resample("4h", closed="left", label="left")
+        .agg(
+            {
+                "open": "first",
+                "high": "max",
+                "low": "min",
+                "close": "last",
+                "volume": "sum",
+            }
+        )
+        .dropna(subset=["open", "high", "low", "close"])
+    )
+    resampled["high"] = np.maximum(resampled["high"], np.maximum(resampled["open"], resampled["close"]))
+    resampled["low"] = np.minimum(resampled["low"], np.minimum(resampled["open"], resampled["close"]))
+    resampled["volume"] = np.maximum(resampled["volume"], 0.0)
+    resampled.index.name = "timestamp"
+    return resampled
+
+
 def _fetch_yfinance(symbol: str, timeframe: str, bars: int) -> pd.DataFrame:
     import yfinance as yf
 
-    interval_map = {"1d": "1d", "1h": "1h", "15m": "15m", "5m": "5m"}
+    is_4h = timeframe == "4h"
+    interval_map = {"1d": "1d", "4h": "1h", "1h": "1h", "15m": "15m", "5m": "5m"}
     interval = interval_map.get(timeframe, "1d")
-    period = "max" if interval == "1d" else "60d"
+    period = "max" if interval == "1d" else ("730d" if interval == "1h" else "60d")
     ticker = yf.Ticker(symbol)
     raw = ticker.history(period=period, interval=interval, auto_adjust=True)
     if raw is None or raw.empty:
@@ -222,6 +264,8 @@ def _fetch_yfinance(symbol: str, timeframe: str, bars: int) -> pd.DataFrame:
     else:
         df.index = df.index.tz_convert("UTC")
     df = df[~df.index.duplicated(keep="last")].sort_index()
+    if is_4h:
+        df = _resample_ohlcv_4h(df)
     if len(df) > bars:
         df = df.iloc[-bars:].copy()
     # Enforce OHLC envelope consistency after floating adjustments
@@ -268,6 +312,11 @@ def fetch_ohlcv(
     fallback_to_synthetic: bool = True,
 ) -> OHLCVDataset:
     """Fetch or load Point-in-Time (PIT) OHLCV market data with local Parquet caching."""
+    if provider == "yfinance" and symbol.upper().startswith("SYNTH:"):
+        symbol = "SPY"
+    elif provider == "ccxt" and symbol.upper().startswith("SYNTH:"):
+        symbol = "BTC/USDT"
+
     cache_root = Path(cache_dir)
     cache_root.mkdir(parents=True, exist_ok=True)
     cache_file = cache_root / _sanitize_cache_key(symbol, provider, timeframe, bars, seed)

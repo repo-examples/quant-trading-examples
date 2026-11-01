@@ -2,12 +2,22 @@
 
 from __future__ import annotations
 
+import json
+import re
 from pathlib import Path
 
+import numpy as np
 from typer.testing import CliRunner
 
 from quantlab.cli import app
-from quantlab.dashboard.app import build_dashboard_bundle, run_dashboard_self_check
+from quantlab.dashboard.app import (
+    build_dashboard_bundle,
+    build_lightweight_charts_canvas_html,
+    run_dashboard_self_check,
+)
+from quantlab.data.loader import OHLCVDataset, generate_synthetic_ohlcv
+from quantlab.indicators.registry import get_registry
+from quantlab.proofs.stats_gate import run_proof_suite
 
 runner = CliRunner()
 
@@ -117,3 +127,45 @@ def test_cli_dashboard_check_and_4_quadrant_bundle() -> None:
     assert len(bundle.fig_q3_wasserstein.data) == 2
     assert len(bundle.fig_q3_pareto_bode.data) >= 8
     assert bundle.transpilation.pine_code.startswith("//@version=6")
+
+
+def test_lightweight_charts_canvas_yfinance_ms_timestamps_and_intraday() -> None:
+    # Simulate yfinance DatetimeIndex with millisecond resolution (datetime64[ms, UTC])
+    df_ms = generate_synthetic_ohlcv(symbol="SPY", timeframe="1d", bars=120, seed=42)
+    df_ms.index = df_ms.index.as_unit("ms")
+    ds_yf = OHLCVDataset(symbol="SPY", provider="yfinance", timeframe="1d", df=df_ms)
+
+    reg = get_registry()
+    kalman_spec = reg.get("KalmanFilter")
+    proof = run_proof_suite(kalman_spec, ds_yf, n_surrogates=10, seed=42)
+
+    html = build_lightweight_charts_canvas_html(ds_yf, proof, overlay=kalman_spec.overlay)
+    assert "autoSize: true" in html
+
+    m_candles = re.search(r"candleSeries\.setData\((\[.*?\])\);", html)
+    m_ind = re.search(r"indSeries\.setData\((\[.*?\])\);", html)
+    assert m_candles is not None and m_ind is not None
+
+    candles = json.loads(m_candles.group(1))
+    ind_points = json.loads(m_ind.group(1))
+    assert len(candles) == 120
+    assert len(ind_points) == 120
+
+    candle_times = [c["time"] for c in candles]
+    ind_times = [p["time"] for p in ind_points]
+    assert candle_times == ind_times
+    assert len(set(candle_times)) == 120
+    assert all(b > a for a, b in zip(candle_times, candle_times[1:], strict=False))
+    assert candle_times[0] > 1_700_000_000
+
+    # Also verify intraday 15m timeframe produces strictly increasing unique timestamps
+    df_15m = generate_synthetic_ohlcv(symbol="SPY", timeframe="15m", bars=80, seed=42)
+    df_15m.index = df_15m.index.as_unit("ms")
+    ds_15m = OHLCVDataset(symbol="SPY", provider="yfinance", timeframe="15m", df=df_15m)
+    html_15m = build_lightweight_charts_canvas_html(ds_15m, proof, overlay=True)
+    m_c15 = re.search(r"candleSeries\.setData\((\[.*?\])\);", html_15m)
+    assert m_c15 is not None
+    candles_15m = json.loads(m_c15.group(1))
+    times_15m = [c["time"] for c in candles_15m]
+    assert len(set(times_15m)) == 80
+    assert np.all(np.diff(times_15m) == 900)
