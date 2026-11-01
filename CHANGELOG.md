@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **TradingView Lightweight Charts Rendering on `yfinance`, `ccxt`, and Intraday Timeframes (`quantlab.dashboard.app`, `quantlab.data.loader`)**:
+  - Replaced `df.index.astype("int64") // 10**9` with resolution-agnostic UTC Unix epoch second extraction (`extract_unix_timestamps` and `OHLCVDataset.unix_timestamps` via `.as_unit("s").astype("int64")`) so `datetime64[ms, UTC]` (`yfinance`/`ccxt`), `datetime64[s, UTC]`, and `datetime64[us, UTC]` (`synthetic`) indices no longer truncate into duplicate timestamps (`[1718, 1718, ...]`) that caused TradingView Lightweight Charts v4.2.0 to render a blank canvas.
+  - Enabled `autoSize: true` on the Lightweight Charts instance and sanitized non-finite (`NaN`/`Inf`) OHLC and indicator values prior to JSON serialization.
+  - Added causal `1h`-to-`4h` OHLCV resampling (`_resample_ohlcv_4h`) for `yfinance` `4h` timeframe support, provider-scoped symbol input keys (`key=f"symbol_input_{provider}"`), and cross-provider `SYNTH:` symbol sanitization.
+
 ### Added
 - **Claude Code Review & CI Workflows (`.github/workflows/`)**:
   - `ci.yml`: Automated `CI` workflow running `ruff check src tests`, `pytest -v`, and `quantlab dashboard --check` on Python 3.11.

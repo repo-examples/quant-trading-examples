@@ -55,7 +55,12 @@ def build_lightweight_charts_canvas_html(
 ) -> str:
     """Build an interactive HTML5 TradingView Lightweight Charts canvas with OHLCV + Indicator."""
     df = dataset.df
-    timestamps = (df.index.astype("int64") // 10**9).tolist()
+    timestamps = dataset.unix_timestamps.tolist()
+    open_arr = np.nan_to_num(df["open"].to_numpy(dtype=np.float64), nan=0.0, posinf=0.0, neginf=0.0)
+    high_arr = np.nan_to_num(df["high"].to_numpy(dtype=np.float64), nan=0.0, posinf=0.0, neginf=0.0)
+    low_arr = np.nan_to_num(df["low"].to_numpy(dtype=np.float64), nan=0.0, posinf=0.0, neginf=0.0)
+    close_arr = np.nan_to_num(df["close"].to_numpy(dtype=np.float64), nan=0.0, posinf=0.0, neginf=0.0)
+    ind_arr = np.nan_to_num(proof.raw_series, nan=0.0, posinf=0.0, neginf=0.0)
     candles = [
         {
             "time": int(ts),
@@ -66,16 +71,16 @@ def build_lightweight_charts_canvas_html(
         }
         for ts, open_v, high_v, low_v, close_v in zip(
             timestamps,
-            df["open"].to_numpy(),
-            df["high"].to_numpy(),
-            df["low"].to_numpy(),
-            df["close"].to_numpy(),
+            open_arr,
+            high_arr,
+            low_arr,
+            close_arr,
             strict=False,
         )
     ]
     ind_points = [
         {"time": int(ts), "value": float(v)}
-        for ts, v in zip(timestamps, np.nan_to_num(proof.raw_series, nan=0.0), strict=False)
+        for ts, v in zip(timestamps, ind_arr, strict=False)
     ]
 
     candles_json = json.dumps(candles)
@@ -98,6 +103,7 @@ def build_lightweight_charts_canvas_html(
 <script>
   const container = document.getElementById('tv-chart');
   const chart = LightweightCharts.createChart(container, {{
+    autoSize: true,
     layout: {{ background: {{ type: 'solid', color: '{DARK_BG}' }}, textColor: '#CBD5E1' }},
     grid: {{ vertLines: {{ color: '{GRID_COLOR}' }}, horzLines: {{ color: '{GRID_COLOR}' }} }},
     rightPriceScale: {{ borderColor: '#334155' }},
@@ -575,7 +581,11 @@ def render_streamlit_app() -> None:
         st.header("🔬 Research Controls")
         provider = st.selectbox("Market Data Provider", ["synthetic", "yfinance", "ccxt"], index=0)
         default_sym = "SYNTH:COUPLED_OU" if provider == "synthetic" else ("SPY" if provider == "yfinance" else "BTC/USDT")
-        symbol = st.text_input("Symbol / Stochastic Process", value=default_sym)
+        symbol = st.text_input(
+            "Symbol / Stochastic Process",
+            value=default_sym,
+            key=f"symbol_input_{provider}",
+        )
         timeframe = st.selectbox("Timeframe", ["1d", "4h", "1h", "15m"], index=0)
         bars = int(st.slider("PIT History Bars", min_value=200, max_value=2000, value=600, step=100))
         selected_ind = st.selectbox("Active Indicator", indicator_names, index=indicator_names.index("KalmanFilter"))
