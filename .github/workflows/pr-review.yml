@@ -123,6 +123,7 @@ jobs:
       - name: Run PR Review & Auto-Fix (Claude Opus 5.5 High)
         if: steps.meta.outputs.skip != 'true' && steps.meta.outputs.merge_only != 'true'
         id: claude
+        continue-on-error: true
         uses: anthropics/claude-code-action@v1
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
