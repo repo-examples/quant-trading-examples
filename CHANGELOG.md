@@ -8,6 +8,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Quantitative Pipeline Loading Status & Skeleton UI (`SPEC-QUANT-LOAD-01` — `quantlab.dashboard.loading_state`, `quantlab.dashboard.app`)**:
+  - `PipelineStageStatus`, `PipelineExecutionTelemetry`, and `PipelineCancelledError` immutable state models with weighted 4-stage progress calculation (`0% -> 20% -> 40% -> 85% -> 100%`) and live per-surrogate telemetry (`40% + 45% * (i / N)`).
+  - Multi-Stage Pipeline Status Card (`render_pipeline_status_card_html`) with linear-gradient progress bar (`#7C4DFF -> #FF4B4B`), parameter context pills, mid-run parameter restart amber badge, long-running warning state (`bars > 1500`, `n_surrogates > 60`, or `elapsed > 15s`), and step-level failure recovery controls (`Retry Run`, `Reset to Default Seed`, `Cancel Run`).
+  - Cold-Load Structural Shimmer Skeletons (`render_shimmer_skeletons_html`) with 4 responsive KPI skeleton cards (`height: 96px`) and a 360px primary chart skeleton (`"Awaiting surrogate convergence..."`), Warm-State chart dimming (`45%` opacity, `filter: blur(1px)`), post-load collapsible summary bar with expandable execution log, stage-throttled `aria-live="polite"` announcements, and `@media (prefers-reduced-motion: reduce)` support.
+  - `tests/test_loading_state_ui.py`: Unit and integration test suite covering `SPEC-QUANT-LOAD-01` progress math, telemetry sequence, shimmer skeletons, warm reload, error/cancel states, and accessibility.
 - **Claude Code Review & CI Workflows (`.github/workflows/`)**:
   - `ci.yml`: Automated `CI` workflow running `ruff check src tests`, `pytest -v`, and `quantlab dashboard --check` on Python 3.11.
   - `claude.yml`: Interactive `@claude` GitHub App workflow powered by Claude Opus 5.5 High (`anthropics/claude-code-action@v1`).

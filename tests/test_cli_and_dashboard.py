@@ -94,9 +94,13 @@ def test_cli_dashboard_check_and_4_quadrant_bundle() -> None:
     res_dash = runner.invoke(app, ["dashboard", "--check"])
     assert res_dash.exit_code == 0
     assert '"status": "ok"' in res_dash.stdout
+    assert '"loading_spec_id": "SPEC-QUANT-LOAD-01"' in res_dash.stdout
 
     check_dict = run_dashboard_self_check()
     assert check_dict["status"] == "ok"
+    assert check_dict["loading_spec_id"] == "SPEC-QUANT-LOAD-01"
+    assert check_dict["telemetry_stages_verified"] == 4
+    assert check_dict["final_progress_pct"] == 100.0
     assert check_dict["indicators_evaluated"] == 8
 
     bundle = build_dashboard_bundle(

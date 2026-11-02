@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 
 import numba
@@ -280,6 +281,7 @@ def run_proof_suite(
     ic_threshold: float = 0.02,
     vif_threshold: float = 5.0,
     seed: int = 42,
+    surrogate_progress_callback: Callable[[int, int], None] | None = None,
 ) -> ProofSuiteResult:
     """Execute the complete Stationarity, Information-Theoretic, Statistical, and DSP Proof Suite."""
     raw_series = spec.evaluate(dataset.df)
@@ -304,6 +306,7 @@ def run_proof_suite(
         surrogate_method=surrogate_method,
         alpha=te_alpha,
         seed=seed,
+        surrogate_progress_callback=surrogate_progress_callback,
     )
 
     stats_res = evaluate_stats_gate(
@@ -343,6 +346,8 @@ def evaluate_multiple_indicators(
     n_surrogates: int = 50,
     surrogate_method: SurrogateMethod = "iaaft",
     seed: int = 42,
+    active_indicator_name: str | None = None,
+    surrogate_progress_callback: Callable[[int, int], None] | None = None,
 ) -> list[ProofSuiteResult]:
     """Evaluate a collection of indicators and update their DSP Pareto-optimality status."""
     preliminary: list[ProofSuiteResult] = [
@@ -352,6 +357,11 @@ def evaluate_multiple_indicators(
             n_surrogates=n_surrogates,
             surrogate_method=surrogate_method,
             seed=seed,
+            surrogate_progress_callback=(
+                surrogate_progress_callback
+                if active_indicator_name is not None and s.name.lower() == active_indicator_name.lower()
+                else None
+            ),
         )
         for s in specs
     ]
