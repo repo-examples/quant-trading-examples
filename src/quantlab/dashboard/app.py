@@ -3,23 +3,44 @@
 from __future__ import annotations
 
 import json
+import time
+from collections.abc import Callable
 from dataclasses import dataclass
 
 import numpy as np
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 
+from quantlab.dashboard.loading_state import (
+    SPEC_ID,
+    PipelineCancelledError,
+    PipelineExecutionTelemetry,
+    PipelineStageStatus,
+    advance_telemetry_stage,
+    build_initial_telemetry,
+    build_loading_theme_css,
+    cancel_telemetry,
+    complete_telemetry,
+    compute_stage_progress_pct,
+    fail_telemetry,
+    is_long_running_load,
+    render_completed_summary_bar_html,
+    render_pipeline_status_card_html,
+    render_shimmer_skeletons_html,
+    render_warm_dimmed_banner_html,
+    update_surrogate_telemetry,
+)
 from quantlab.data.loader import DataProvider, OHLCVDataset, fetch_ohlcv
 from quantlab.indicators.custom_examples import reconstruct_phase_space_3d
 from quantlab.indicators.registry import get_registry
+from quantlab.proofs.dsp import DSPResult, identify_pareto_frontier
 from quantlab.proofs.stats_gate import (
     ProofSuiteResult,
-    evaluate_multiple_indicators,
     run_proof_suite,
 )
 from quantlab.transpiler.pine_v6 import TranspilationArtifact, transpile_to_pine_v6
 
-DARK_BG = "#0B0F19"
+DARK_BG = "#0E1117"
 PANEL_BG = "#111827"
 GRID_COLOR = "#1F2937"
 CYAN = "#00F5D4"
@@ -27,6 +48,38 @@ MAGENTA = "#FF2A85"
 AMBER = "#F59E0B"
 EMERALD = "#10B981"
 SLATE = "#94A3B8"
+
+__all__ = [
+    "DARK_BG",
+    "SPEC_ID",
+    "DashboardBundle",
+    "PipelineCancelledError",
+    "PipelineExecutionTelemetry",
+    "PipelineStageStatus",
+    "advance_telemetry_stage",
+    "build_dashboard_bundle",
+    "build_dashboard_bundle_with_telemetry",
+    "build_dashboard_state",
+    "build_initial_telemetry",
+    "build_lightweight_charts_canvas_html",
+    "build_loading_theme_css",
+    "build_q1_figures",
+    "build_q2_figures",
+    "build_q3_figures",
+    "cancel_telemetry",
+    "complete_telemetry",
+    "compute_stage_progress_pct",
+    "fail_telemetry",
+    "is_long_running_load",
+    "render_completed_summary_bar_html",
+    "render_dashboard",
+    "render_pipeline_status_card_html",
+    "render_shimmer_skeletons_html",
+    "render_streamlit_app",
+    "render_warm_dimmed_banner_html",
+    "run_dashboard_self_check",
+    "update_surrogate_telemetry",
+]
 
 
 @dataclass(frozen=True)
@@ -448,6 +501,45 @@ def build_q3_figures(
     return fig_ic_vif, fig_wass, fig_dsp
 
 
+def _update_pareto_results(
+    preliminary: list[ProofSuiteResult],
+) -> list[ProofSuiteResult]:
+    frontier_map = identify_pareto_frontier(
+        {r.indicator_name: (r.dsp.mean_phase_lag_bars, r.dsp.jerk_energy) for r in preliminary}
+    )
+    final_results: list[ProofSuiteResult] = []
+    for r in preliminary:
+        is_pareto = frontier_map.get(r.indicator_name, True)
+        updated_dsp = DSPResult(
+            instantaneous_amplitude=r.dsp.instantaneous_amplitude,
+            instantaneous_phase=r.dsp.instantaneous_phase,
+            instantaneous_frequency=r.dsp.instantaneous_frequency,
+            mean_phase_lag_rad=r.dsp.mean_phase_lag_rad,
+            mean_phase_lag_bars=r.dsp.mean_phase_lag_bars,
+            jerk_energy=r.dsp.jerk_energy,
+            bode_frequencies=r.dsp.bode_frequencies,
+            bode_magnitude_db=r.dsp.bode_magnitude_db,
+            bode_phase_deg=r.dsp.bode_phase_deg,
+            pareto_optimal=is_pareto,
+        )
+        final_results.append(
+            ProofSuiteResult(
+                indicator_name=r.indicator_name,
+                indicator_title=r.indicator_title,
+                category=r.category,
+                symbol=r.symbol,
+                raw_series=r.raw_series,
+                stationary_series=r.stationary_series,
+                stationarity=r.stationarity,
+                entropy=r.entropy,
+                stats_gate=r.stats_gate,
+                dsp=updated_dsp,
+                overall_passed=r.overall_passed,
+            )
+        )
+    return final_results
+
+
 def build_dashboard_bundle(
     symbol: str = "SYNTH:COUPLED_OU",
     provider: DataProvider = "synthetic",
@@ -457,47 +549,199 @@ def build_dashboard_bundle(
     custom_expr: str | None = None,
     n_surrogates: int = 30,
     seed: int = 42,
+    telemetry_callback: Callable[[PipelineExecutionTelemetry], None] | None = None,
+    is_warm_reload: bool = False,
+    restarted_with_updated_params: bool = False,
+    cancel_check: Callable[[], bool] | None = None,
 ) -> DashboardBundle:
-    """Compute and assemble all data, proofs, figures, and Pine Script v6 artifacts for the 4 quadrants."""
-    dataset = fetch_ohlcv(
+    """Compute and assemble all data, proofs, figures, and Pine Script v6 artifacts for the 4 quadrants.
+
+    Emits SPEC-QUANT-LOAD-01 4-stage telemetry snapshots when `telemetry_callback` is provided.
+    """
+    t0 = time.perf_counter()
+    effective_surrogates = max(10, int(n_surrogates))
+    telemetry = build_initial_telemetry(
         symbol=symbol,
         provider=provider,
         timeframe=timeframe,
         bars=bars,
+        indicator_name=indicator_name,
+        n_surrogates=effective_surrogates,
         seed=seed,
-    )
-    registry = get_registry()
-    all_specs = registry.list_all()
-    all_proofs = evaluate_multiple_indicators(
-        specs=all_specs,
-        dataset=dataset,
-        n_surrogates=n_surrogates,
-        seed=seed,
-    )
-    proof_map = {p.indicator_name.lower(): p for p in all_proofs}
-    active_spec = registry.get(indicator_name)
-    active_proof = proof_map.get(
-        active_spec.name.lower(),
-        run_proof_suite(active_spec, dataset, n_surrogates=n_surrogates, seed=seed),
+        is_warm_reload=is_warm_reload,
+        restarted_with_updated_params=restarted_with_updated_params,
     )
 
-    if custom_expr and custom_expr.strip():
-        transpilation = transpile_to_pine_v6(
-            custom_expr.strip(),
-            params=active_spec.default_params,
-            name=f"Custom_{active_spec.name}",
-            title=f"Custom {active_spec.title}",
-            overlay=active_spec.overlay,
-            recurrences=active_spec.state_recurrences(),
-            proof_result=active_proof,
+    def _emit(state: PipelineExecutionTelemetry) -> None:
+        if telemetry_callback is not None:
+            telemetry_callback(state)
+
+    def _check_cancel(current_state: PipelineExecutionTelemetry) -> None:
+        if cancel_check is not None and cancel_check():
+            cancelled = cancel_telemetry(current_state, elapsed_seconds=time.perf_counter() - t0)
+            _emit(cancelled)
+            raise PipelineCancelledError("Quantitative pipeline run cancelled by user.")
+
+    # Stage 1 (0% -> 20%): Synthesizing / Fetching Market Data
+    _emit(telemetry)
+    _check_cancel(telemetry)
+    t_stage1 = time.perf_counter()
+    try:
+        dataset = fetch_ohlcv(
+            symbol=symbol,
+            provider=provider,
+            timeframe=timeframe,
+            bars=bars,
+            seed=seed,
         )
-    else:
-        transpilation = transpile_to_pine_v6(active_spec, proof_result=active_proof)
+    except PipelineCancelledError:
+        raise
+    except Exception as exc:
+        failed = fail_telemetry(
+            telemetry,
+            error_step=1,
+            error_message=str(exc),
+            elapsed_seconds=time.perf_counter() - t0,
+        )
+        _emit(failed)
+        raise
+    d_stage1 = time.perf_counter() - t_stage1
 
-    lw_html = build_lightweight_charts_canvas_html(dataset, active_proof, overlay=active_spec.overlay)
-    fig_q1_ohlcv, fig_q1_phase = build_q1_figures(dataset, active_proof, overlay=active_spec.overlay)
-    fig_q2_ent, fig_q2_surr = build_q2_figures(dataset, active_proof)
-    fig_q3_ic, fig_q3_wass, fig_q3_dsp = build_q3_figures(dataset, active_proof, all_proofs)
+    # Stage 2 (20% -> 40%): Computing Active Indicator
+    telemetry = advance_telemetry_stage(
+        telemetry,
+        active_stage=2,
+        elapsed_seconds=time.perf_counter() - t0,
+        completed_stage_duration=d_stage1,
+    )
+    _emit(telemetry)
+    _check_cancel(telemetry)
+    t_stage2 = time.perf_counter()
+    try:
+        registry = get_registry()
+        active_spec = registry.get(indicator_name)
+        _ = active_spec.evaluate(dataset.df)
+    except PipelineCancelledError:
+        raise
+    except Exception as exc:
+        failed = fail_telemetry(
+            telemetry,
+            error_step=2,
+            error_message=str(exc),
+            elapsed_seconds=time.perf_counter() - t0,
+        )
+        _emit(failed)
+        raise
+    d_stage2 = time.perf_counter() - t_stage2
+
+    # Stage 3 (40% -> 85%): Simulating Monte Carlo Surrogates for Active Indicator
+    telemetry = advance_telemetry_stage(
+        telemetry,
+        active_stage=3,
+        elapsed_seconds=time.perf_counter() - t0,
+        completed_stage_duration=d_stage2,
+    )
+    _emit(telemetry)
+    _check_cancel(telemetry)
+    t_stage3 = time.perf_counter()
+
+    def _on_surrogate(cur_idx: int, _total: int) -> None:
+        nonlocal telemetry
+        _check_cancel(telemetry)
+        telemetry = update_surrogate_telemetry(
+            telemetry,
+            current_surrogate=cur_idx,
+            elapsed_seconds=time.perf_counter() - t0,
+        )
+        _emit(telemetry)
+
+    try:
+        active_prelim = run_proof_suite(
+            spec=active_spec,
+            dataset=dataset,
+            n_surrogates=effective_surrogates,
+            seed=seed,
+            surrogate_progress_callback=_on_surrogate,
+        )
+    except PipelineCancelledError:
+        raise
+    except Exception as exc:
+        failed = fail_telemetry(
+            telemetry,
+            error_step=3,
+            error_message=str(exc),
+            elapsed_seconds=time.perf_counter() - t0,
+        )
+        _emit(failed)
+        raise
+    d_stage3 = time.perf_counter() - t_stage3
+
+    # Stage 4 (85% -> 100%): Evaluating Hilbert Phase-Jerk Frontier & Pine v6 Transpiler
+    telemetry = advance_telemetry_stage(
+        telemetry,
+        active_stage=4,
+        elapsed_seconds=time.perf_counter() - t0,
+        completed_stage_duration=d_stage3,
+    )
+    _emit(telemetry)
+    _check_cancel(telemetry)
+    t_stage4 = time.perf_counter()
+    try:
+        all_specs = registry.list_all()
+        preliminary: list[ProofSuiteResult] = []
+        for s in all_specs:
+            _check_cancel(telemetry)
+            if s.name.lower() == active_spec.name.lower():
+                preliminary.append(active_prelim)
+            else:
+                preliminary.append(
+                    run_proof_suite(
+                        spec=s,
+                        dataset=dataset,
+                        n_surrogates=effective_surrogates,
+                        seed=seed,
+                    )
+                )
+        all_proofs = _update_pareto_results(preliminary)
+        proof_map = {p.indicator_name.lower(): p for p in all_proofs}
+        active_proof = proof_map.get(active_spec.name.lower(), active_prelim)
+
+        if custom_expr and custom_expr.strip():
+            transpilation = transpile_to_pine_v6(
+                custom_expr.strip(),
+                params=active_spec.default_params,
+                name=f"Custom_{active_spec.name}",
+                title=f"Custom {active_spec.title}",
+                overlay=active_spec.overlay,
+                recurrences=active_spec.state_recurrences(),
+                proof_result=active_proof,
+            )
+        else:
+            transpilation = transpile_to_pine_v6(active_spec, proof_result=active_proof)
+
+        lw_html = build_lightweight_charts_canvas_html(dataset, active_proof, overlay=active_spec.overlay)
+        fig_q1_ohlcv, fig_q1_phase = build_q1_figures(dataset, active_proof, overlay=active_spec.overlay)
+        fig_q2_ent, fig_q2_surr = build_q2_figures(dataset, active_proof)
+        fig_q3_ic, fig_q3_wass, fig_q3_dsp = build_q3_figures(dataset, active_proof, all_proofs)
+    except PipelineCancelledError:
+        raise
+    except Exception as exc:
+        failed = fail_telemetry(
+            telemetry,
+            error_step=4,
+            error_message=str(exc),
+            elapsed_seconds=time.perf_counter() - t0,
+        )
+        _emit(failed)
+        raise
+
+    d_stage4 = time.perf_counter() - t_stage4
+    telemetry = complete_telemetry(
+        telemetry,
+        elapsed_seconds=time.perf_counter() - t0,
+        stage4_duration=d_stage4,
+    )
+    _emit(telemetry)
 
     return DashboardBundle(
         dataset=dataset,
@@ -515,9 +759,41 @@ def build_dashboard_bundle(
     )
 
 
-def run_dashboard_self_check() -> dict[str, object]:
-    """Validate that all 4 Quadrants build cleanly in headless mode."""
+def build_dashboard_bundle_with_telemetry(
+    symbol: str = "SYNTH:COUPLED_OU",
+    provider: DataProvider = "synthetic",
+    timeframe: str = "1d",
+    bars: int = 500,
+    indicator_name: str = "KalmanFilter",
+    custom_expr: str | None = None,
+    n_surrogates: int = 30,
+    seed: int = 42,
+    is_warm_reload: bool = False,
+    restarted_with_updated_params: bool = False,
+    cancel_check: Callable[[], bool] | None = None,
+) -> tuple[DashboardBundle, list[PipelineExecutionTelemetry]]:
+    """Build the 4-Quadrant DashboardBundle and return the full sequence of SPEC-QUANT-LOAD-01 telemetry states."""
+    snapshots: list[PipelineExecutionTelemetry] = []
     bundle = build_dashboard_bundle(
+        symbol=symbol,
+        provider=provider,
+        timeframe=timeframe,
+        bars=bars,
+        indicator_name=indicator_name,
+        custom_expr=custom_expr,
+        n_surrogates=n_surrogates,
+        seed=seed,
+        telemetry_callback=snapshots.append,
+        is_warm_reload=is_warm_reload,
+        restarted_with_updated_params=restarted_with_updated_params,
+        cancel_check=cancel_check,
+    )
+    return bundle, snapshots
+
+
+def run_dashboard_self_check() -> dict[str, object]:
+    """Validate that all 4 Quadrants and SPEC-QUANT-LOAD-01 telemetry build cleanly in headless mode."""
+    bundle, snapshots = build_dashboard_bundle_with_telemetry(
         symbol="SYNTH:COUPLED_OU",
         provider="synthetic",
         bars=300,
@@ -525,8 +801,13 @@ def run_dashboard_self_check() -> dict[str, object]:
         n_surrogates=15,
         seed=42,
     )
+    final_snap = snapshots[-1]
     return {
         "status": "ok",
+        "loading_spec_id": final_snap.spec_id,
+        "telemetry_snapshots_count": len(snapshots),
+        "telemetry_stages_verified": len(final_snap.stages),
+        "final_progress_pct": final_snap.overall_progress_pct,
         "symbol": bundle.dataset.symbol,
         "bars": bundle.dataset.n_bars,
         "active_indicator": bundle.active_proof.indicator_name,
@@ -540,6 +821,144 @@ def run_dashboard_self_check() -> dict[str, object]:
             + len(bundle.fig_q3_pareto_bode.data)
         ),
     }
+
+
+def _render_dashboard_workspace_content(
+    st: object,
+    components: object,
+    bundle: DashboardBundle,
+    selected_ind: str,
+    dimmed: bool = False,
+    key_suffix: str = "live",
+) -> None:
+    """Render the 5 KPI cards and 4 Diagnostic Quadrants (optionally wrapped in warm-dimmed state)."""
+    if dimmed:
+        st.markdown('<div class="ql-warm-dimmed">', unsafe_allow_html=True)  # type: ignore[attr-defined]
+
+    p = bundle.active_proof
+    col1, col2, col3, col4, col5 = st.columns(5)  # type: ignore[attr-defined]
+    col1.metric("FracDiff d* (ADF p)", f"d*={p.stationarity.d_optimal:.2f}", f"p={p.stationarity.p_value:.4f}")
+    col2.metric(
+        "Transfer Entropy TE(X->R)",
+        f"{p.entropy.symbolic_te:.5f}",
+        f"Z={p.entropy.z_score:.2f} (p={p.entropy.p_value:.3f})",
+    )
+    col3.metric("Max |Spearman Rank IC|", f"{p.stats_gate.max_abs_ic:.4f}", f"Horizon h={p.stats_gate.best_horizon}")
+    col4.metric(
+        "Baseline Orthogonality VIF",
+        f"{p.stats_gate.vif_score:.2f}",
+        "PASS (<5.0)" if p.stats_gate.vif_passed else "HIGH",
+    )
+    col5.metric("DSP Phase Lag / Jerk", f"{p.dsp.mean_phase_lag_bars:.2f} bars", f"Jerk={p.dsp.jerk_energy:.3f}")
+
+    tab_q1, tab_q2, tab_q3, tab_q4 = st.tabs(  # type: ignore[attr-defined]
+        [
+            "📐 Q1: OHLCV Canvas & 3D Phase-Space",
+            "🔀 Q2: Entropy & Surrogate Proofs",
+            "📊 Q3: Statistical & DSP Pareto Frontier",
+            "⚙️ Q4: SymPy AST & Pine Script v6 Studio",
+        ]
+    )
+
+    with tab_q1:
+        st.subheader("TradingView Lightweight Charts HTML5 Canvas")  # type: ignore[attr-defined]
+        components.html(bundle.lightweight_charts_html, height=440)  # type: ignore[attr-defined]
+        q1_left, q1_right = st.columns(2)  # type: ignore[attr-defined]
+        with q1_left:
+            st.plotly_chart(  # type: ignore[attr-defined]
+                bundle.fig_q1_ohlcv,
+                use_container_width=True,
+                key=f"q1_ohlcv_{key_suffix}",
+            )
+        with q1_right:
+            st.plotly_chart(  # type: ignore[attr-defined]
+                bundle.fig_q1_phase_space,
+                use_container_width=True,
+                key=f"q1_phase_{key_suffix}",
+            )
+
+    with tab_q2:
+        q2_left, q2_right = st.columns(2)  # type: ignore[attr-defined]
+        with q2_left:
+            st.plotly_chart(  # type: ignore[attr-defined]
+                bundle.fig_q2_rolling_entropy,
+                use_container_width=True,
+                key=f"q2_ent_{key_suffix}",
+            )
+        with q2_right:
+            st.plotly_chart(  # type: ignore[attr-defined]
+                bundle.fig_q2_surrogates,
+                use_container_width=True,
+                key=f"q2_surr_{key_suffix}",
+            )
+
+    with tab_q3:
+        q3_top_l, q3_top_r = st.columns(2)  # type: ignore[attr-defined]
+        with q3_top_l:
+            st.plotly_chart(  # type: ignore[attr-defined]
+                bundle.fig_q3_ic_vif,
+                use_container_width=True,
+                key=f"q3_ic_{key_suffix}",
+            )
+        with q3_top_r:
+            st.plotly_chart(  # type: ignore[attr-defined]
+                bundle.fig_q3_wasserstein,
+                use_container_width=True,
+                key=f"q3_wass_{key_suffix}",
+            )
+        st.plotly_chart(  # type: ignore[attr-defined]
+            bundle.fig_q3_pareto_bode,
+            use_container_width=True,
+            key=f"q3_dsp_{key_suffix}",
+        )
+
+    with tab_q4:
+        st.subheader("Live Neuro-Symbolic SymPy AST Editor -> TradingView Pine Script v6")  # type: ignore[attr-defined]
+        reg = get_registry()
+        active_spec = reg.get(selected_ind)
+        default_formula = str(active_spec.symbolic_ast())
+        expr_input = st.text_input(  # type: ignore[attr-defined]
+            "Symbolic Expression (SymPy AST):",
+            value=default_formula,
+            key=f"ast_expr_{key_suffix}",
+        )
+        try:
+            live_art = transpile_to_pine_v6(
+                expr_input,
+                params=active_spec.default_params,
+                name=active_spec.name,
+                title=active_spec.title,
+                overlay=active_spec.overlay,
+                recurrences=active_spec.state_recurrences(),
+                proof_result=bundle.active_proof,
+            )
+            st.latex(f"\\mathcal{{I}}_t = {live_art.latex_expr}")  # type: ignore[attr-defined]
+            c_pine, c_card = st.columns(2)  # type: ignore[attr-defined]
+            with c_pine:
+                st.markdown("#### Generated Pine Script v6 (`//@version=6`)")  # type: ignore[attr-defined]
+                st.code(live_art.pine_code, language="pine")  # type: ignore[attr-defined]
+                st.download_button(  # type: ignore[attr-defined]
+                    "⬇️ Download Pine Script v6 (.pine)",
+                    data=live_art.pine_code,
+                    file_name=f"{live_art.indicator_name.lower()}_v6.pine",
+                    mime="text/plain",
+                    key=f"dl_pine_{key_suffix}",
+                )
+            with c_card:
+                st.markdown("#### Auditable Markdown Research Card")  # type: ignore[attr-defined]
+                st.markdown(live_art.research_card_md)  # type: ignore[attr-defined]
+                st.download_button(  # type: ignore[attr-defined]
+                    "⬇️ Download Research Card (.md)",
+                    data=live_art.research_card_md,
+                    file_name=f"{live_art.indicator_name.lower()}_research_card.md",
+                    mime="text/markdown",
+                    key=f"dl_card_{key_suffix}",
+                )
+        except Exception as exc:
+            st.error(f"Symbolic AST Transpilation Error: {exc}")  # type: ignore[attr-defined]
+
+    if dimmed:
+        st.markdown("</div>", unsafe_allow_html=True)  # type: ignore[attr-defined]
 
 
 def render_streamlit_app() -> None:
@@ -558,6 +977,7 @@ def render_streamlit_app() -> None:
         <style>
         .stApp {{ background-color: {DARK_BG}; color: #F8FAFC; }}
         </style>
+        {build_loading_theme_css()}
         """,
         unsafe_allow_html=True,
     )
@@ -571,105 +991,161 @@ def render_streamlit_app() -> None:
     reg = get_registry()
     indicator_names = reg.names()
 
+    default_seed_val = int(st.session_state.get("ql_seed_reset_value", 42))
+
     with st.sidebar:
         st.header("🔬 Research Controls")
         provider = st.selectbox("Market Data Provider", ["synthetic", "yfinance", "ccxt"], index=0)
-        default_sym = "SYNTH:COUPLED_OU" if provider == "synthetic" else ("SPY" if provider == "yfinance" else "BTC/USDT")
+        default_sym = (
+            "SYNTH:COUPLED_OU"
+            if provider == "synthetic"
+            else ("SPY" if provider == "yfinance" else "BTC/USDT")
+        )
         symbol = st.text_input("Symbol / Stochastic Process", value=default_sym)
         timeframe = st.selectbox("Timeframe", ["1d", "4h", "1h", "15m"], index=0)
         bars = int(st.slider("PIT History Bars", min_value=200, max_value=2000, value=600, step=100))
-        selected_ind = st.selectbox("Active Indicator", indicator_names, index=indicator_names.index("KalmanFilter"))
+        selected_ind = st.selectbox(
+            "Active Indicator",
+            indicator_names,
+            index=indicator_names.index("KalmanFilter"),
+        )
         n_surr = int(st.slider("Monte Carlo Surrogates", min_value=15, max_value=100, value=30, step=5))
-        seed = int(st.number_input("Deterministic Seed", value=42, step=1))
+        seed = int(st.number_input("Deterministic Seed", value=default_seed_val, step=1))
 
-    bundle = build_dashboard_bundle(
-        symbol=symbol,
-        provider=provider,  # type: ignore[arg-type]
-        timeframe=timeframe,
-        bars=bars,
-        indicator_name=selected_ind,
-        n_surrogates=n_surr,
-        seed=seed,
-    )
+    current_params = (provider, symbol, timeframe, bars, selected_ind, n_surr, seed)
+    last_params = st.session_state.get("ql_last_params")
+    cached_bundle: DashboardBundle | None = st.session_state.get("ql_last_bundle")
+    was_running: bool = bool(st.session_state.get("ql_is_running", False))
 
-    p = bundle.active_proof
-    col1, col2, col3, col4, col5 = st.columns(5)
-    col1.metric("FracDiff d* (ADF p)", f"d*={p.stationarity.d_optimal:.2f}", f"p={p.stationarity.p_value:.4f}")
-    col2.metric("Transfer Entropy TE(X->R)", f"{p.entropy.symbolic_te:.5f}", f"Z={p.entropy.z_score:.2f} (p={p.entropy.p_value:.3f})")
-    col3.metric("Max |Spearman Rank IC|", f"{p.stats_gate.max_abs_ic:.4f}", f"Horizon h={p.stats_gate.best_horizon}")
-    col4.metric("Baseline Orthogonality VIF", f"{p.stats_gate.vif_score:.2f}", "PASS (<5.0)" if p.stats_gate.vif_passed else "HIGH")
-    col5.metric("DSP Phase Lag / Jerk", f"{p.dsp.mean_phase_lag_bars:.2f} bars", f"Jerk={p.dsp.jerk_energy:.3f}")
+    is_warm_reload = cached_bundle is not None and last_params is not None and last_params != current_params
+    restarted_mid_run = (was_running and last_params != current_params) or is_warm_reload
 
-    tab_q1, tab_q2, tab_q3, tab_q4 = st.tabs(
-        [
-            "📐 Q1: OHLCV Canvas & 3D Phase-Space",
-            "🔀 Q2: Entropy & Surrogate Proofs",
-            "📊 Q3: Statistical & DSP Pareto Frontier",
-            "⚙️ Q4: SymPy AST & Pine Script v6 Studio",
-        ]
-    )
+    status_slot = st.empty()
+    log_and_controls_slot = st.container()
+    workspace_slot = st.empty()
 
-    with tab_q1:
-        st.subheader("TradingView Lightweight Charts HTML5 Canvas")
-        components.html(bundle.lightweight_charts_html, height=440)
-        q1_left, q1_right = st.columns(2)
-        with q1_left:
-            st.plotly_chart(bundle.fig_q1_ohlcv, use_container_width=True)
-        with q1_right:
-            st.plotly_chart(bundle.fig_q1_phase_space, use_container_width=True)
+    # Check if user clicked Cancel Run on the previous interaction
+    if st.session_state.get("ql_cancel_requested", False):
+        st.session_state["ql_cancel_requested"] = False
+        cancelled_tel = cancel_telemetry(
+            build_initial_telemetry(
+                symbol=symbol,
+                provider=provider,
+                timeframe=timeframe,
+                bars=bars,
+                indicator_name=selected_ind,
+                n_surrogates=n_surr,
+                seed=seed,
+            ),
+            elapsed_seconds=0.0,
+        )
+        status_slot.markdown(render_pipeline_status_card_html(cancelled_tel), unsafe_allow_html=True)
+        with log_and_controls_slot:
+            if st.button("🔄 Retry Run", key="ql_retry_after_cancel"):
+                st.rerun()
+        if cached_bundle is not None:
+            with workspace_slot.container():
+                _render_dashboard_workspace_content(
+                    st,
+                    components,
+                    cached_bundle,
+                    selected_ind,
+                    dimmed=True,
+                    key_suffix="cancelled_cached",
+                )
+        return
 
-    with tab_q2:
-        q2_left, q2_right = st.columns(2)
-        with q2_left:
-            st.plotly_chart(bundle.fig_q2_rolling_entropy, use_container_width=True)
-        with q2_right:
-            st.plotly_chart(bundle.fig_q2_surrogates, use_container_width=True)
-
-    with tab_q3:
-        q3_top_l, q3_top_r = st.columns(2)
-        with q3_top_l:
-            st.plotly_chart(bundle.fig_q3_ic_vif, use_container_width=True)
-        with q3_top_r:
-            st.plotly_chart(bundle.fig_q3_wasserstein, use_container_width=True)
-        st.plotly_chart(bundle.fig_q3_pareto_bode, use_container_width=True)
-
-    with tab_q4:
-        st.subheader("Live Neuro-Symbolic SymPy AST Editor -> TradingView Pine Script v6")
-        active_spec = reg.get(selected_ind)
-        default_formula = str(active_spec.symbolic_ast())
-        expr_input = st.text_input("Symbolic Expression (SymPy AST):", value=default_formula)
-        try:
-            live_art = transpile_to_pine_v6(
-                expr_input,
-                params=active_spec.default_params,
-                name=active_spec.name,
-                title=active_spec.title,
-                overlay=active_spec.overlay,
-                recurrences=active_spec.state_recurrences(),
-                proof_result=bundle.active_proof,
+    # Show Cold-Load Shimmer Skeletons or Warm-State Dimmed Charts while pipeline runs
+    if cached_bundle is None:
+        workspace_slot.markdown(render_shimmer_skeletons_html(symbol), unsafe_allow_html=True)
+    elif is_warm_reload:
+        with workspace_slot.container():
+            _render_dashboard_workspace_content(
+                st,
+                components,
+                cached_bundle,
+                selected_ind,
+                dimmed=True,
+                key_suffix="warm_preview",
             )
-            st.latex(f"\\mathcal{{I}}_t = {live_art.latex_expr}")
-            c_pine, c_card = st.columns(2)
-            with c_pine:
-                st.markdown("#### Generated Pine Script v6 (`//@version=6`)")
-                st.code(live_art.pine_code, language="pine")
-                st.download_button(
-                    "⬇️ Download Pine Script v6 (.pine)",
-                    data=live_art.pine_code,
-                    file_name=f"{live_art.indicator_name.lower()}_v6.pine",
-                    mime="text/plain",
-                )
-            with c_card:
-                st.markdown("#### Auditable Markdown Research Card")
-                st.markdown(live_art.research_card_md)
-                st.download_button(
-                    "⬇️ Download Research Card (.md)",
-                    data=live_art.research_card_md,
-                    file_name=f"{live_art.indicator_name.lower()}_research_card.md",
-                    mime="text/markdown",
-                )
-        except Exception as exc:
-            st.error(f"Symbolic AST Transpilation Error: {exc}")
+
+    st.session_state["ql_is_running"] = True
+    latest_telemetry: PipelineExecutionTelemetry | None = None
+
+    def _on_telemetry(tel: PipelineExecutionTelemetry) -> None:
+        nonlocal latest_telemetry
+        latest_telemetry = tel
+        status_slot.markdown(render_pipeline_status_card_html(tel), unsafe_allow_html=True)
+
+    try:
+        if cached_bundle is not None and last_params == current_params and st.session_state.get("ql_last_telemetry"):
+            bundle = cached_bundle
+            latest_telemetry = st.session_state["ql_last_telemetry"]
+        else:
+            bundle = build_dashboard_bundle(
+                symbol=symbol,
+                provider=provider,  # type: ignore[arg-type]
+                timeframe=timeframe,
+                bars=bars,
+                indicator_name=selected_ind,
+                n_surrogates=n_surr,
+                seed=seed,
+                telemetry_callback=_on_telemetry,
+                is_warm_reload=is_warm_reload,
+                restarted_with_updated_params=restarted_mid_run,
+            )
+            st.session_state["ql_last_bundle"] = bundle
+            st.session_state["ql_last_params"] = current_params
+            st.session_state["ql_last_telemetry"] = latest_telemetry
+        st.session_state["ql_is_running"] = False
+    except Exception as exc:
+        st.session_state["ql_is_running"] = False
+        workspace_slot.empty()
+        if latest_telemetry is None or latest_telemetry.system_state != "error":
+            err_tel = fail_telemetry(
+                build_initial_telemetry(
+                    symbol=symbol,
+                    provider=provider,
+                    timeframe=timeframe,
+                    bars=bars,
+                    indicator_name=selected_ind,
+                    n_surrogates=n_surr,
+                    seed=seed,
+                ),
+                error_step=1,
+                error_message=str(exc),
+                elapsed_seconds=0.0,
+            )
+            status_slot.markdown(render_pipeline_status_card_html(err_tel), unsafe_allow_html=True)
+        with log_and_controls_slot:
+            c_retry, c_reset, _ = st.columns([1, 1, 4])
+            with c_retry:
+                if st.button("🔄 Retry Run", key="ql_error_retry"):
+                    st.rerun()
+            with c_reset:
+                if st.button("🎲 Reset to Default Seed (42)", key="ql_error_reset_seed"):
+                    st.session_state["ql_seed_reset_value"] = 42
+                    st.rerun()
+        return
+
+    # Post-Load Collapse into Compact Summary Bar + Expandable Execution Log
+    if latest_telemetry is not None:
+        status_slot.markdown(render_completed_summary_bar_html(latest_telemetry), unsafe_allow_html=True)
+        with log_and_controls_slot, st.expander("Show Execution Log ▾", expanded=False):
+            st.markdown(render_pipeline_status_card_html(latest_telemetry), unsafe_allow_html=True)
+            if st.button("⏹️ Cancel / Clear Cached Run", key="ql_cancel_run_btn"):
+                st.session_state["ql_cancel_requested"] = True
+                st.rerun()
+
+    with workspace_slot.container():
+        _render_dashboard_workspace_content(
+            st,
+            components,
+            bundle,
+            selected_ind,
+            dimmed=False,
+            key_suffix="live",
+        )
 
 
 # Canonical aliases matching Spec-Kit Task T017 contract names
