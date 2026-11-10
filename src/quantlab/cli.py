@@ -41,7 +41,7 @@ def _badge(passed: bool) -> str:
 def cmd_fetch(
     symbol: str = typer.Option("SYNTH:COUPLED_OU", "--symbol", "-s", help="Ticker or synthetic stochastic process"),
     provider: str = typer.Option("synthetic", "--provider", "-p", help="Data provider: synthetic | yfinance | ccxt"),
-    timeframe: str = typer.Option("1d", "--timeframe", "-t", help="Bar timeframe (1d, 4h, 1h, 15m)"),
+    timeframe: str = typer.Option("1D", "--timeframe", "-t", help="Bar timeframe (15m, 1h, 4h, 1D, 1W, 1M, 3M)"),
     bars: int = typer.Option(1000, "--bars", "-n", help="Number of historical PIT bars"),
     seed: int = typer.Option(42, "--seed", help="Random seed for deterministic synthetic processes"),
     fracdiff: bool = typer.Option(True, "--fracdiff/--no-fracdiff", help="Run FracDiff + ADF stationarity search"),
@@ -54,7 +54,12 @@ def cmd_fetch(
     table.add_column("Metric", style="cyan", no_wrap=True)
     table.add_column("Value", style="white")
     table.add_row("Symbol / Provider", f"{ds.symbol} ({ds.provider})")
-    table.add_row("Timeframe / Bars", f"{ds.timeframe} / {ds.n_bars}")
+    tf_bars_val = f"{ds.timeframe} / {ds.n_bars}"
+    if ds.is_clamped and ds.requested_bars is not None:
+        tf_bars_val += f" (clamped from {ds.requested_bars} requested)"
+    if ds.resampled_from:
+        tf_bars_val += f" [resampled from {ds.resampled_from}]"
+    table.add_row("Timeframe / Bars", tf_bars_val)
     table.add_row("Start UTC", str(ds.df.index[0]))
     table.add_row("End UTC", str(ds.df.index[-1]))
     table.add_row("Close Range", f"[{ds.df['close'].min():.4f}, {ds.df['close'].max():.4f}]")
@@ -140,7 +145,7 @@ def cmd_evaluate(
     indicator: str = typer.Option("all", "--indicator", "-i", help="Indicator name or 'all'"),
     symbol: str = typer.Option("SYNTH:COUPLED_OU", "--symbol", "-s", help="Symbol or synthetic process"),
     provider: str = typer.Option("synthetic", "--provider", "-p", help="Data provider: synthetic | yfinance | ccxt"),
-    timeframe: str = typer.Option("1d", "--timeframe", "-t", help="Timeframe"),
+    timeframe: str = typer.Option("1D", "--timeframe", "-t", help="Timeframe (15m, 1h, 4h, 1D, 1W, 1M, 3M)"),
     bars: int = typer.Option(1000, "--bars", "-n", help="Number of historical bars"),
     surrogates: int = typer.Option(50, "--surrogates", "-m", help="Number of Monte Carlo surrogates"),
     surrogate_method: str = typer.Option("iaaft", "--surrogate-method", help="Null generator: iaaft | block_shuffle"),
@@ -184,6 +189,8 @@ def cmd_evaluate(
                 "indicator": r.indicator_name,
                 "category": r.category,
                 "symbol": r.symbol,
+                "timeframe": ds.timeframe,
+                "bars": ds.n_bars,
                 "overall_passed": r.overall_passed,
                 "stationarity": {
                     "d_optimal": r.stationarity.d_optimal,
@@ -226,6 +233,7 @@ def cmd_prove(
     indicator: str = typer.Option("all", "--indicator", "-i", help="Indicator name or 'all'"),
     symbol: str = typer.Option("SYNTH:COUPLED_OU", "--symbol", "-s", help="Symbol or synthetic process"),
     provider: str = typer.Option("synthetic", "--provider", "-p", help="Data provider"),
+    timeframe: str = typer.Option("1D", "--timeframe", "-t", help="Timeframe (15m, 1h, 4h, 1D, 1W, 1M, 3M)"),
     bars: int = typer.Option(1000, "--bars", "-n", help="Number of historical bars"),
     surrogates: int = typer.Option(50, "--surrogates", "-m", help="Number of Monte Carlo surrogates"),
     seed: int = typer.Option(42, "--seed", help="Random seed"),
@@ -235,7 +243,7 @@ def cmd_prove(
         indicator=indicator,
         symbol=symbol,
         provider=provider,
-        timeframe="1d",
+        timeframe=timeframe,
         bars=bars,
         surrogates=surrogates,
         surrogate_method="iaaft",

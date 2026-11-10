@@ -15,22 +15,24 @@ quantlab/
 ├── CHANGELOG.md
 └── src/
     └── quantlab/
-        ├── cli.py                  # Typer + Rich CLI entrypoint
+        ├── cli.py                      # Typer + Rich CLI entrypoint
         ├── data/
-        │   ├── loader.py           # PIT OHLCV fetcher (yfinance, ccxt, synthetic) + Parquet cache
-        │   └── stationarity.py     # Fixed-Width Window Fractional Differentiation (FracDiff) + ADF test
+        │   ├── loader.py               # PIT OHLCV fetcher (yfinance, ccxt, synthetic) + Parquet cache
+        │   └── stationarity.py         # Fixed-Width Window Fractional Differentiation (FracDiff) + ADF test
         ├── indicators/
-        │   ├── registry.py         # Dual Symbolic (SymPy) + Numba indicator registry & custom AST nodes
-        │   ├── baselines.py        # Standard TA baselines (RSI, EMA, ATR, MACD, KAMA)
-        │   └── custom_examples.py  # Physics-inspired indicators (KalmanFilter, PhaseSpaceEnergy, EntropyFlow)
+        │   ├── registry.py             # Dual Symbolic (SymPy) + Numba indicator registry & custom AST nodes
+        │   ├── baselines.py            # Standard TA baselines (RSI, EMA, ATR, MACD, KAMA)
+        │   └── custom_examples.py      # Physics-inspired indicators (KalmanFilter, PhaseSpaceEnergy, EntropyFlow)
         ├── proofs/
-        │   ├── entropy.py          # Shannon, Permutation, KSG Mutual Info, Symbolic & k-NN Transfer Entropy + Surrogates
-        │   ├── stats_gate.py       # Spearman Rank IC, Wasserstein Regime Distance, Orthogonality VIF & Proof Suite
-        │   └── dsp.py              # Hilbert Transform, Bode Response & Phase-Lag vs. Smoothness (Jerk) Frontier
+        │   ├── entropy.py              # Shannon, Permutation, KSG Mutual Info, Symbolic & k-NN Transfer Entropy + Surrogates
+        │   ├── stats_gate.py           # Spearman Rank IC, Wasserstein Regime Distance, Orthogonality VIF & Proof Suite
+        │   └── dsp.py                  # Hilbert Transform, Bode Response & Phase-Lag vs. Smoothness (Jerk) Frontier
         ├── transpiler/
-        │   └── pine_v6.py          # SymPy AST -> TradingView Pine Script v6 + Markdown Research Card
+        │   └── pine_v6.py              # SymPy AST -> TradingView Pine Script v6 + Markdown Research Card
         └── dashboard/
-            └── app.py              # 4-Quadrant Interactive Quant Diagnostic Dashboard (Streamlit + Plotly + Lightweight Charts)
+            ├── chart_help.py           # SPEC-UI-HELP-03 Contextual Chart Help Registry, Header Bars & ? Popovers
+            ├── loading_state.py        # SPEC-QUANT-LOAD-01 4-Stage Pipeline Telemetry, Shimmer Skeletons & Clamped/Resampled Pills
+            └── app.py                  # 4-Quadrant Interactive Quant Diagnostic Dashboard (SPEC-CHART-TV-01 + SPEC-CTRL-TF-02)
 ```
 
 ---
@@ -73,8 +75,8 @@ uv run quantlab indicators
 # Deterministic coupled Ornstein-Uhlenbeck + Heston volatility regime benchmark
 uv run quantlab fetch --provider synthetic --symbol SYNTH:COUPLED_OU --bars 1000 --fracdiff
 
-# Yahoo Finance or CCXT crypto exchange with local Parquet caching
-uv run quantlab fetch --provider yfinance --symbol SPY --timeframe 1d --bars 1000
+# Yahoo Finance or CCXT crypto exchange across intraday & higher timeframes (15m, 1h, 4h, 1D, 1W, 1M, 3M)
+uv run quantlab fetch --provider yfinance --symbol SPY --timeframe 1W --bars 400
 ```
 
 ### 3. Run the Mathematical Proof Suite (`evaluate` / `prove`)
@@ -100,7 +102,7 @@ uv run quantlab transpile --expr "(close - EMA(close, 20)) / Max(Stdev(close, 20
 ### 5. Launch the 4-Quadrant Interactive Quant Diagnostic Dashboard
 
 ```powershell
-# Run headless self-verification of all 4 quadrants
+# Run headless self-verification of all 4 quadrants and SPEC-QUANT-LOAD-01 loading telemetry
 uv run quantlab dashboard --check
 
 # Launch live interactive Streamlit web app on http://localhost:8501

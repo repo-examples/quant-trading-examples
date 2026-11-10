@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Literal
 
@@ -403,6 +404,7 @@ def evaluate_entropy_proof(
     bins: int = 4,
     alpha: float = 0.05,
     seed: int = 42,
+    surrogate_progress_callback: Callable[[int, int], None] | None = None,
 ) -> EntropyProofResult:
     """Execute the full Information-Theoretic Proof Suite with Monte Carlo surrogate gating."""
     ind = np.asarray(indicator_series, dtype=np.float64)
@@ -446,6 +448,8 @@ def evaluate_entropy_proof(
         xs_disc = _quantile_discretize(surrogates[i], b)
         s_sym = float(_discrete_transfer_entropy_kernel(xs_disc, ycs_disc, yfs_disc, b))
         surr_te[i] = s_sym
+        if surrogate_progress_callback is not None:
+            surrogate_progress_callback(i + 1, m)
 
     # Align surrogate scale with observed symbolic TE for clean null comparison
     surr_mean = float(np.mean(surr_te))
