@@ -148,6 +148,16 @@ def test_us2_warm_reload_mid_run_restart_long_warning_and_summary_bar() -> None:
     assert "Completed in 4.2s" in summary_html
     assert "SYNTH:COUPLED_OU (1600 bars, 75 surrogates)" in summary_html
 
+    clamped_summary_html = render_completed_summary_bar_html(
+        completed_tel,
+        available_bars=135,
+        requested_bars=600,
+        resampled_from="1D",
+        timeframe_label="3M",
+    )
+    assert "Using all 135 available 3M bars for SYNTH:COUPLED_OU (requested 600)." in clamped_summary_html
+    assert "Resampled 3M bars from 1D history." in clamped_summary_html
+
 
 def test_us3_step_error_recovery_cancellation_and_accessibility() -> None:
     """Verify step-level error telemetry, user cancellation, stage-throttled aria-live, and reduced-motion CSS."""

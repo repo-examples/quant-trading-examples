@@ -28,6 +28,13 @@ def test_cli_indicators_and_fetch() -> None:
     assert "SYNTH:COUPLED_OU" in res_fetch.stdout
     assert "Stationarity Gate" in res_fetch.stdout
 
+    res_fetch_3m = runner.invoke(
+        app,
+        ["fetch", "--provider", "synthetic", "--symbol", "SYNTH:COUPLED_OU", "--timeframe", "3M", "--bars", "80"],
+    )
+    assert res_fetch_3m.exit_code == 0
+    assert "3M / 80" in res_fetch_3m.stdout
+
 
 def test_cli_evaluate_and_prove_json_export(tmp_path: Path) -> None:
     json_file = tmp_path / "scorecard.json"
@@ -99,6 +106,11 @@ def test_cli_dashboard_check_and_4_quadrant_bundle() -> None:
     check_dict = run_dashboard_self_check()
     assert check_dict["status"] == "ok"
     assert check_dict["loading_spec_id"] == "SPEC-QUANT-LOAD-01"
+    assert check_dict["tv_chart_spec_id"] == "SPEC-CHART-TV-01"
+    assert check_dict["timeframe_spec_id"] == "SPEC-CTRL-TF-02"
+    assert check_dict["chart_help_spec_id"] == "SPEC-UI-HELP-03"
+    assert check_dict["higher_timeframes_verified"] == ["1D", "1W", "1M", "3M"]
+    assert check_dict["chart_help_panels_registered"] == 9
     assert check_dict["telemetry_stages_verified"] == 4
     assert check_dict["final_progress_pct"] == 100.0
     assert check_dict["indicators_evaluated"] == 8

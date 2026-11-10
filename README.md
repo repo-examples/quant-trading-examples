@@ -30,8 +30,9 @@ quantlab/
         ├── transpiler/
         │   └── pine_v6.py              # SymPy AST -> TradingView Pine Script v6 + Markdown Research Card
         └── dashboard/
-            ├── loading_state.py        # SPEC-QUANT-LOAD-01 4-Stage Pipeline Telemetry, Shimmer Skeletons & Warm Dimming
-            └── app.py                  # 4-Quadrant Interactive Quant Diagnostic Dashboard (Streamlit + Plotly + Lightweight Charts)
+            ├── chart_help.py           # SPEC-UI-HELP-03 Contextual Chart Help Registry, Header Bars & ? Popovers
+            ├── loading_state.py        # SPEC-QUANT-LOAD-01 4-Stage Pipeline Telemetry, Shimmer Skeletons & Clamped/Resampled Pills
+            └── app.py                  # 4-Quadrant Interactive Quant Diagnostic Dashboard (SPEC-CHART-TV-01 + SPEC-CTRL-TF-02)
 ```
 
 ---
@@ -74,8 +75,8 @@ uv run quantlab indicators
 # Deterministic coupled Ornstein-Uhlenbeck + Heston volatility regime benchmark
 uv run quantlab fetch --provider synthetic --symbol SYNTH:COUPLED_OU --bars 1000 --fracdiff
 
-# Yahoo Finance or CCXT crypto exchange with local Parquet caching
-uv run quantlab fetch --provider yfinance --symbol SPY --timeframe 1d --bars 1000
+# Yahoo Finance or CCXT crypto exchange across intraday & higher timeframes (15m, 1h, 4h, 1D, 1W, 1M, 3M)
+uv run quantlab fetch --provider yfinance --symbol SPY --timeframe 1W --bars 400
 ```
 
 ### 3. Run the Mathematical Proof Suite (`evaluate` / `prove`)

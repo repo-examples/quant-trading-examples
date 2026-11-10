@@ -8,6 +8,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Contextual Chart Help & Collision-Free Header Bars (`SPEC-UI-HELP-03` — `quantlab.dashboard.chart_help`, `quantlab.dashboard.app`, `.streamlit/config.toml`)**:
+  - `ChartHelpEntry`, `CHART_HELP_REGISTRY`, `get_chart_help`, `render_chart_help_popover_html`, and `render_chart_header` providing standardized header bars (`Title` left, anchored `st.popover("?")` trigger right) with 3-part educational microcopy (`1. What It Is`, `2. Axes & Visuals`, `3. How to Interpret`) across all 8 diagnostic charts (`TV-01`, `Q1A`, `Q1B`, `Q2A`, `Q2B`, `Q3A`, `Q3B`, `Q3C`) plus the `Q4` Neuro-Symbolic Studio (`Q4A`) and graceful missing-key fallback.
+  - Headerless collision-free Plotly layouts (`title=None`, horizontal top-left legends, `margin.t >= 56`), color-blind safe border/hatch differentiation on `Q3B` Bull vs. Bear regime histograms, and `.streamlit/config.toml` dark-theme lock (`#0E1117`).
+- **Multi-Timeframe Selector & History Sample Guards (`SPEC-CTRL-TF-02` — `quantlab.data.loader`, `quantlab.dashboard.app`, `quantlab.dashboard.loading_state`, `quantlab.cli`)**:
+  - `TimeframeSpec`, `TIMEFRAME_SPECS`, `normalize_timeframe` (preserving `1m` 1-minute vs. `1M`/`1mo` 1-month disambiguation), and expanded timeframe controls (`15m`, `1h`, `4h`, `1D`, `1W`, `1M`, `3M`, default `1D`) paired with a synced Q1 quick-switcher bar (`1D | 1W | 1M | 3M`) and URL query-parameter sync (`provider`, `symbol`, `tf`).
+  - Maximum-history fetching (`period="max"`) on `1D`/`1W`/`1M`/`3M`, zero-lookahead causal OHLCV resampling (`resample_ohlcv_causal`) for unsupported provider intervals (`3M` on `ccxt`, `4h` on `yfinance`), amber clamped-history summary pills (`35 <= available < requested`), and `InsufficientHistoryError` `< 35`-bar proof sample guard (`validate_minimum_proof_bars`).
 - **Quantitative Pipeline Loading Status & Skeleton UI (`SPEC-QUANT-LOAD-01` — `quantlab.dashboard.loading_state`, `quantlab.dashboard.app`)**:
   - `PipelineStageStatus`, `PipelineExecutionTelemetry`, and `PipelineCancelledError` immutable state models with weighted 4-stage progress calculation (`0% -> 20% -> 40% -> 85% -> 100%`) and live per-surrogate telemetry (`40% + 45% * (i / N)`).
   - Multi-Stage Pipeline Status Card (`render_pipeline_status_card_html`) with linear-gradient progress bar (`#7C4DFF -> #FF4B4B`), parameter context pills, mid-run parameter restart amber badge, long-running warning state (`bars > 1500`, `n_surrogates > 60`, or `elapsed > 15s`), and step-level failure recovery controls (`Retry Run`, `Reset to Default Seed`, `Cancel Run`).
@@ -34,3 +40,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **CLI & 4-Quadrant Diagnostic Dashboard (`quantlab.cli`, `quantlab.dashboard.app`)**:
   - `typer` + `rich` CLI supporting `fetch`, `indicators`, `evaluate`, `prove`, `transpile`, and `dashboard`.
   - Dark-mode 4-Quadrant Streamlit + Plotly + TradingView Lightweight Charts HTML5 web application.
+
+### Fixed
+- **TradingView Lightweight Charts HTML5 Canvas Rendering (`SPEC-CHART-TV-01` — `quantlab.data.loader`, `quantlab.dashboard.app`)**:
+  - Resolved blank HTML5 canvas under `yfinance`/`ccxt` by flattening `pd.MultiIndex` columns, fixing `datetime64[s, UTC]` timestamp division collapse, serializing `1D`/`1W`/`1M`/`3M` bars as unique ascending `YYYY-MM-DD` strings and intraday bars as UTC Unix epoch seconds, and mapping non-finite (`NaN`/`Inf`) indicator warm-up bars to Lightweight Charts whitespace objects (`{"time": bar_time}`).
+  - Added live top-left crosshair OHLCV + indicator hover legend (`#tv-legend`), `autoSize: true` + `ResizeObserver` + `fitContent()`, mobile touch scroll protection (`vertTouchDrag`), `role="img"` + dynamic `aria-label` summary, and inline diagnostic empty/error state cards.

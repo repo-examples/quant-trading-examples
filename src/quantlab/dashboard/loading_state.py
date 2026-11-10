@@ -641,6 +641,44 @@ def build_loading_theme_css() -> str:
   font-weight: 700;
   margin-right: 6px;
 }}
+.ql-clamped-pill {{
+  display: inline-block;
+  background-color: #3B2F13;
+  border: 1px solid #F59E0B;
+  color: #FBBF24;
+  border-radius: 9999px;
+  padding: 3px 11px;
+  font-family: "JetBrains Mono", "Source Code Pro", Consolas, monospace;
+  font-size: 12px;
+  font-weight: 500;
+}}
+.ql-resampled-pill {{
+  display: inline-block;
+  background-color: #1F2937;
+  border: 1px solid #38BDF8;
+  color: #BAE6FD;
+  border-radius: 9999px;
+  padding: 3px 11px;
+  font-family: "JetBrains Mono", "Source Code Pro", Consolas, monospace;
+  font-size: 12px;
+  font-weight: 500;
+}}
+.ql-insufficient-callout {{
+  background-color: #26151B;
+  border: 1px solid {STATUS_ACTIVE_CORAL};
+  border-left: 4px solid {STATUS_ACTIVE_CORAL};
+  border-radius: 10px;
+  padding: 16px 20px;
+  margin-bottom: 16px;
+  color: {TEXT_PRIMARY_DARK};
+  font-size: 14px;
+  line-height: 20px;
+}}
+.ql-insufficient-callout-title {{
+  font-weight: 700;
+  color: #FCA5A5;
+  margin-bottom: 6px;
+}}
 .ql-kpi-skeleton-grid {{
   display: grid;
   grid-template-columns: repeat(4, 1fr);
@@ -695,6 +733,12 @@ def build_loading_theme_css() -> str:
   .ql-kpi-skeleton-grid {{
     grid-template-columns: repeat(2, 1fr);
   }}
+  div[data-testid="stHorizontalBlock"] {{
+    flex-wrap: wrap !important;
+  }}
+  div[data-testid="stHorizontalBlock"] > div[data-testid="stColumn"] {{
+    min-width: 46% !important;
+  }}
 }}
 @media (max-width: 767px) {{
   .ql-kpi-skeleton-grid {{
@@ -703,6 +747,12 @@ def build_loading_theme_css() -> str:
   .ql-status-header {{
     flex-direction: column;
     align-items: flex-start;
+  }}
+  div[data-testid="stHorizontalBlock"] {{
+    flex-wrap: wrap !important;
+  }}
+  div[data-testid="stHorizontalBlock"] > div[data-testid="stColumn"] {{
+    min-width: 100% !important;
   }}
 }}
 @media (prefers-reduced-motion: reduce) {{
@@ -892,23 +942,78 @@ def render_shimmer_skeletons_html(symbol: str = "SYNTH:COUPLED_OU") -> str:
 """
 
 
-def render_completed_summary_bar_html(telemetry: PipelineExecutionTelemetry) -> str:
-    """Render the compact post-load 40px summary bar and execution log breakdown HTML."""
+def render_completed_summary_bar_html(
+    telemetry: PipelineExecutionTelemetry,
+    *,
+    available_bars: int | None = None,
+    requested_bars: int | None = None,
+    resampled_from: str | None = None,
+    timeframe_label: str | None = None,
+) -> str:
+    """Render the compact post-load 40px summary bar and optional SPEC-CTRL-TF-02 history pills."""
     sym_esc = html.escape(telemetry.symbol)
     ind_esc = html.escape(telemetry.indicator_name)
-    tf_esc = html.escape(telemetry.timeframe)
+    tf_esc = html.escape(timeframe_label or telemetry.timeframe)
+    shown_bars = telemetry.bars if available_bars is None else int(available_bars)
+
+    extra_badges: list[str] = []
+    if available_bars is not None and requested_bars is not None and int(available_bars) < int(requested_bars):
+        extra_badges.append(
+            f'<span class="ql-clamped-pill">'
+            f"Using all {int(available_bars)} available {tf_esc} bars for {sym_esc} "
+            f"(requested {int(requested_bars)})."
+            f"</span>"
+        )
+    if resampled_from and resampled_from.strip():
+        src_esc = html.escape(resampled_from.strip())
+        extra_badges.append(
+            f'<span class="ql-resampled-pill">'
+            f"Resampled {tf_esc} bars from {src_esc} history."
+            f"</span>"
+        )
+
+    extra_html = (
+        f'<div class="ql-context-pills" style="margin-top:6px;margin-bottom:0;">{"".join(extra_badges)}</div>'
+        if extra_badges
+        else ""
+    )
+
     return f"""
-<div class="ql-summary-bar" role="status" aria-label="Pipeline Execution Summary" data-spec-id="{telemetry.spec_id}">
+<div class="ql-summary-bar" role="status" aria-live="polite" aria-label="Pipeline Execution Summary" data-spec-id="{telemetry.spec_id}">
   <div>
     <span class="ql-summary-bar-check">✓</span>
     <strong>Completed in {telemetry.elapsed_seconds:.1f}s</strong>
-    <span> • {sym_esc} ({telemetry.bars} bars, {telemetry.n_surrogates} surrogates)</span>
+    <span> • {sym_esc} ({shown_bars} bars, {telemetry.n_surrogates} surrogates)</span>
+    {extra_html}
   </div>
   <div class="ql-context-pills" style="margin-bottom:0;">
     <span class="ql-context-pill">{sym_esc}</span>
     <span class="ql-context-pill">{tf_esc}</span>
     <span class="ql-context-pill">{ind_esc}</span>
     <span class="ql-context-pill">Seed: {telemetry.seed}</span>
+  </div>
+</div>
+"""
+
+
+def render_insufficient_history_html(
+    symbol: str,
+    timeframe: str,
+    available_bars: int,
+    minimum_bars: int = 35,
+    indicator_name: str | None = None,
+) -> str:
+    """Render the SPEC-CTRL-TF-02 inline callout when returned bars fall below minimum proof floor."""
+    sym_esc = html.escape(symbol)
+    tf_esc = html.escape(timeframe)
+    ind_note = f" (active indicator: {html.escape(indicator_name)})" if indicator_name else ""
+    return f"""
+<div class="ql-insufficient-callout" role="alert" data-spec-id="SPEC-CTRL-TF-02">
+  <div class="ql-insufficient-callout-title">⚠️ Insufficient Historical Sample on {tf_esc}</div>
+  <div>
+    Insufficient history: {sym_esc} only has {int(available_bars)} bars on {tf_esc}
+    (minimum {int(minimum_bars)} required for indicator &amp; stationarity proofs){ind_note}.
+    Switch to 1W or 1D.
   </div>
 </div>
 """
